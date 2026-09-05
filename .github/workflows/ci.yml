@@ -1,10 +1,21 @@
 name: CI
 
+# Fast lane on every push/PR (dev is where work lands, keep it quick); the
+# cross-platform compile checks are gated to main and PRs targeting main, so a
+# mistake that only shows up on macOS/Windows is caught before a release build
+# runs — without slowing the dev loop.
 on:
   push:
-    branches: [dev]
+    branches: [dev, main]
   pull_request:
     branches: [dev, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -39,9 +50,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --all-targets
-      - run: cargo test --all-targets
+      - run: cargo build --all-targets --locked
+      - run: cargo test --all-targets --locked
 
+  # Guard the declared MSRV: the crate must keep building on rust-version 1.86.
   msrv:
     name: msrv (1.86)
     runs-on: ubuntu-latest
@@ -49,4 +61,28 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.86
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --all-targets
+      - run: cargo build --all-targets --locked
+
+  # The CLI ships on macOS and Windows too, so it has to compile there. Building
+  # the tests (not just `cargo check`) forces codegen on any cfg-gated code. `if`
+  # SKIPS the job rather than queuing it, so the dev fast lane is never blocked
+  # by a never-scheduled job.
+  check-macos:
+    name: check (macOS)
+    if: github.ref_name == 'main' || github.base_ref == 'main'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --all-targets --all-features --locked
+
+  check-windows:
+    name: check (Windows)
+    if: github.ref_name == 'main' || github.base_ref == 'main'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --all-targets --all-features --locked

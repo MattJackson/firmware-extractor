@@ -1,12 +1,25 @@
 name: Build
 
-# main builds the release binary (Linux musl static + macOS) and uploads it as a
-# workflow artifact. Tagging a commit `v*.*.*` additionally publishes a GitHub
-# Release with the packaged binaries.
+# Cross-platform release binaries for the `fwext` CLI.
+#
+# Triggers:
+#   * push to main       — build every target and upload them as workflow
+#                          artifacts (a smoke test that main always packages on
+#                          all platforms; no GitHub Release is created).
+#   * tag  vX.Y.Z        — additionally publish a GitHub Release with the
+#                          packaged binaries, and bump the Homebrew formula.
+#
+# Each leg publishes a STABLE, unversioned archive name so a download page can
+# link the "latest" URL without knowing the version, plus a version-stamped copy,
+# each with a `.sha256` sidecar:
+#   https://github.com/MattJackson/firmware-extractor/releases/latest/download/fwext-x86_64-unknown-linux-musl.tar.gz
+#   https://github.com/MattJackson/firmware-extractor/releases/latest/download/fwext-aarch64-apple-darwin.tar.gz
+#   https://github.com/MattJackson/firmware-extractor/releases/latest/download/fwext-x86_64-pc-windows-msvc.zip
 on:
   push:
     branches: [main]
     tags: ["v*.*.*"]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,51 +28,205 @@ permissions:
   contents: write
 
 jobs:
+  # Guard: a tag must agree with the crate version it claims to release. Only
+  # meaningful for tag pushes. Does not block `build` — it is a fast tripwire.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Cargo.toml version matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_ver="v$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          if [ "$cargo_ver" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Cargo.toml says $cargo_ver but tag is ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          echo "Version match: $cargo_ver"
+
   build:
     name: build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
     strategy:
+      # One red leg must not cancel the others — the platforms that do build
+      # should still ship.
       fail-fast: false
       matrix:
         include:
+          # Linux: static musl so the CLI is portable across distros.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
+            archive: tar.gz
+            binext: ''
+          # macOS: both architectures as separate binaries. x86_64 cross-compiles
+          # cleanly from the arm64 runner (pure-Rust deps, no host linkage).
           - os: macos-latest
             target: aarch64-apple-darwin
+            archive: tar.gz
+            binext: ''
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+            binext: ''
+          # Windows: MSVC toolchain, packaged as a .zip with a .exe.
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            binext: '.exe'
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pin to the toolchain the project targets (rust-version = "1.86"), so the
+      # shipped binary is built with the same compiler CI gates on.
+      - uses: dtolnay/rust-toolchain@1.86
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-      - name: install musl-tools
+        with:
+          key: ${{ matrix.target }}
+      - name: Install musl tools
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - run: cargo build --release --target ${{ matrix.target }}
-      - name: package
+
+      - name: Build (release)
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin fwext
+
+      # Package into a stable unversioned archive (the "latest" download URL) plus
+      # a version-stamped copy, each with a SHA-256 sidecar.
+      - name: Package
+        shell: bash
         run: |
+          set -euo pipefail
+          target='${{ matrix.target }}'
+          fmt='${{ matrix.archive }}'
+          ext='${{ matrix.binext }}'
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then ver="${GITHUB_REF_NAME}"; else ver="dev-${GITHUB_SHA::7}"; fi
+
+          sha() { # portable sha256 -> <file>.sha256
+            if [ "${RUNNER_OS}" = "macOS" ]; then shasum -a 256 "$1" > "$1.sha256";
+            else sha256sum "$1" > "$1.sha256"; fi
+          }
+
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/fwext dist/
-          cp README.md LICENSE dist/ 2>/dev/null || true
-          cd dist
-          tar -czf fwext-${{ matrix.target }}.tar.gz fwext README.md LICENSE
-          shasum -a 256 fwext-${{ matrix.target }}.tar.gz > fwext-${{ matrix.target }}.tar.gz.sha256
-      - uses: actions/upload-artifact@v4
+          src="target/$target/release/fwext$ext"
+          staged="fwext$ext"
+          cp "$src" "$staged"
+          stable="fwext-$target"          # e.g. fwext-x86_64-unknown-linux-musl
+          versioned="fwext-$ver-$target"
+          files=("$staged")
+          [ -f README.md ] && files+=("README.md")
+          [ -f LICENSE ] && files+=("LICENSE")
+          if [ "$fmt" = "zip" ]; then
+            7z a -tzip "dist/$stable.$fmt" "${files[@]}" >/dev/null
+            cp "dist/$stable.$fmt" "dist/$versioned.$fmt"
+          else
+            tar czf "dist/$stable.$fmt" "${files[@]}"
+            cp "dist/$stable.$fmt" "dist/$versioned.$fmt"
+          fi
+          sha "dist/$stable.$fmt"
+          sha "dist/$versioned.$fmt"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
         with:
           name: fwext-${{ matrix.target }}
-          path: dist/fwext-${{ matrix.target }}.tar.gz*
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
 
-  release:
-    name: publish release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
+      - name: Publish to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
         with:
-          path: dist
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: dist/**/fwext-*.tar.gz*
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  # Rewrite Formula/fwext.rb in the homebrew-tap repo to point at this release's
+  # per-arch macOS tarballs and the linux-musl tarball, then push to the tap's
+  # main (a tap "publishes" straight from its default branch). Runs once, only on
+  # a version tag, after every build leg has uploaded its artifacts — reading the
+  # sha256 sidecars from this run avoids racing the release upload.
+  homebrew:
+    name: bump homebrew tap
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Regenerate and push the formula
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"     # e.g. v0.1.0
+          ver="${version#v}"               # e.g. 0.1.0
+          base="https://github.com/MattJackson/firmware-extractor/releases/download/${version}"
+
+          sha_for() { # $1 = target ; prints the sha256 of that leg's versioned tarball
+            local t="$1" ext="tar.gz"
+            [ "$t" = "x86_64-pc-windows-msvc" ] && ext="zip"
+            awk '{print $1}' "artifacts/fwext-${t}/fwext-${version}-${t}.${ext}.sha256"
+          }
+          sha_arm="$(sha_for aarch64-apple-darwin)"
+          sha_intel="$(sha_for x86_64-apple-darwin)"
+          sha_linux="$(sha_for x86_64-unknown-linux-musl)"
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes"
+
+          git clone git@github.com:MattJackson/homebrew-tap.git tap
+          cat > tap/Formula/fwext.rb <<EOF
+          class Fwext < Formula
+            desc "Generic firmware extractor: any vendor download in -> raw firmware .bin + JSON label out"
+            homepage "https://github.com/MattJackson/firmware-extractor"
+            version "${ver}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "${base}/fwext-${version}-aarch64-apple-darwin.tar.gz"
+                sha256 "${sha_arm}"
+              end
+              on_intel do
+                url "${base}/fwext-${version}-x86_64-apple-darwin.tar.gz"
+                sha256 "${sha_intel}"
+              end
+            end
+
+            on_linux do
+              url "${base}/fwext-${version}-x86_64-unknown-linux-musl.tar.gz"
+              sha256 "${sha_linux}"
+            end
+
+            def install
+              bin.install "fwext"
+            end
+
+            test do
+              assert_match "usage: fwext", shell_output("#{bin}/fwext --help")
+            end
+          end
+          EOF
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "formula already up to date"
+          else
+            git commit -am "fwext ${ver}"
+            git push origin HEAD:main
+          fi
