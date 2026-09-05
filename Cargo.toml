@@ -1,0 +1,32 @@
+[package]
+name = "firmware-extractor"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.86"
+description = "Generic firmware extractor: any vendor download in -> one raw firmware .bin + JSON label out. Signature-based, deterministic, offline."
+license = "MIT"
+repository = "https://github.com/MattJackson/firmware-extractor"
+readme = "README.md"
+keywords = ["firmware", "extractor", "reverse-engineering", "unpack", "carve"]
+categories = ["command-line-utilities", "parsing"]
+
+[[bin]]
+name = "fwext"
+path = "src/main.rs"
+
+[lib]
+name = "fwext"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+flate2 = "1"        # gzip
+zip = { version = "2", default-features = false, features = ["deflate", "bzip2"] }
+bzip2 = "0.4"
+regex = "1"
+memchr = "2"
+
+[profile.release]
+opt-level = 3
