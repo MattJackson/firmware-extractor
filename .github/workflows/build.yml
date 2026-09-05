@@ -224,9 +224,12 @@ jobs:
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet; then
+          git add Formula/fwext.rb
+          # --cached so a brand-new (untracked) formula counts as a change too;
+          # a plain `git diff` would report nothing for a first-time add.
+          if git diff --cached --quiet; then
             echo "formula already up to date"
           else
-            git commit -am "fwext ${ver}"
+            git commit -m "fwext ${ver}"
             git push origin HEAD:main
           fi
