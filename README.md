@@ -1,10 +1,9 @@
 # firmware-extractor (`fwext`)
 
 [![CI](https://github.com/MattJackson/firmware-extractor/actions/workflows/ci.yml/badge.svg)](https://github.com/MattJackson/firmware-extractor/actions/workflows/ci.yml)
-[![Build](https://github.com/MattJackson/firmware-extractor/actions/workflows/build.yml/badge.svg)](https://github.com/MattJackson/firmware-extractor/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/MattJackson/firmware-extractor?display_name=tag&sort=semver)](https://github.com/MattJackson/firmware-extractor/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![MSRV](https://img.shields.io/badge/MSRV-1.86-orange.svg)](#build-from-source)
+[![MSRV](https://img.shields.io/badge/MSRV-1.86-blue.svg)](#build-from-source)
 
 **Any firmware download in → one canonical raw firmware `.bin` + a JSON label out.**
 
