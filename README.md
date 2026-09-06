@@ -1,5 +1,7 @@
 # firmware-extractor (`fwext`)
 
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github-sponsors)](https://github.com/sponsors/MattJackson)
+
 [![CI](https://github.com/MattJackson/firmware-extractor/actions/workflows/ci.yml/badge.svg)](https://github.com/MattJackson/firmware-extractor/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/MattJackson/firmware-extractor?display_name=tag&sort=semver)](https://github.com/MattJackson/firmware-extractor/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
